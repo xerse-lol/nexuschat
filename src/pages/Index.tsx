@@ -1,5 +1,6 @@
+import { useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { 
   Sparkles, 
   Video, 
@@ -12,6 +13,7 @@ import {
   Star
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useAuth } from '@/contexts/AuthContext';
 
 const features = [
   {
@@ -48,6 +50,15 @@ const stats = [
 ];
 
 export default function Index() {
+  const { user, isLoading } = useAuth();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!isLoading && user) {
+      navigate('/dashboard', { replace: true });
+    }
+  }, [isLoading, navigate, user]);
+
   return (
     <div className="min-h-screen bg-background overflow-hidden">
       {/* Navbar */}
