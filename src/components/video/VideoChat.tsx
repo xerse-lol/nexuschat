@@ -12,7 +12,8 @@ import {
   Maximize2,
   Monitor,
   Camera,
-  Volume2
+  Volume2,
+  Users
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -128,9 +129,13 @@ export default function VideoChat() {
   const searchAttemptsRef = useRef(0);
   const matchIdRef = useRef<string | null>(null);
   
-  const { user, awardCallPoint } = useAuth();
+  const { user, awardCallPoint, onlineCount, totalUsers } = useAuth();
   const { toast } = useToast();
   const isConnecting = Boolean(matchId) && !isSearching && !isConnected;
+  const offlineCount = totalUsers !== null && onlineCount !== null
+    ? Math.max(totalUsers - onlineCount, 0)
+    : null;
+  const formatCount = (value: number | null) => (value === null ? '—' : value.toString());
 
   useEffect(() => {
     getMediaDevices();
@@ -820,6 +825,20 @@ export default function VideoChat() {
         <div>
           <h1 className="text-2xl font-display font-bold text-foreground">Video Chat</h1>
           <p className="text-muted-foreground">Connect with random people around the world</p>
+          <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
+            <span className="flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-online" />
+              {formatCount(onlineCount)} Online
+            </span>
+            <span className="flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-offline" />
+              {formatCount(offlineCount)} Offline
+            </span>
+            <span className="flex items-center gap-2">
+              <Users className="h-4 w-4" />
+              {formatCount(totalUsers)} Total
+            </span>
+          </div>
         </div>
         
         <Dialog>

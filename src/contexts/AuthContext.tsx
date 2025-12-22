@@ -53,6 +53,8 @@ interface AuthContextType {
   unlocks: UserUnlocks | null;
   unlockingEnabled: boolean;
   isLoading: boolean;
+  onlineCount: number | null;
+  totalUsers: number | null;
   login: (email: string, password: string) => Promise<AuthResult>;
   signup: (email: string, password: string, username: string) => Promise<AuthResult>;
   loginWithOAuth: (provider: OAuthProvider) => Promise<AuthResult>;
@@ -168,6 +170,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [unlocks, setUnlocks] = useState<UserUnlocks | null>(null);
   const [unlockingEnabled, setUnlockingEnabled] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
+  const [onlineCount, setOnlineCount] = useState<number | null>(null);
+  const [totalUsers, setTotalUsers] = useState<number | null>(null);
 
   const syncProfile = useCallback(async (nextUser: User) => {
     const { error } = await supabase.from('profiles').upsert({
@@ -214,6 +218,71 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       authListener?.subscription.unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (!user) {
+      setOnlineCount(null);
+      return;
+    }
+
+    let isMounted = true;
+    const channel = supabase.channel('global-presence', {
+      config: {
+        presence: { key: user.id },
+        broadcast: { ack: false },
+      },
+    });
+
+    const updatePresence = () => {
+      if (!isMounted) return;
+      const state = channel.presenceState() as Record<string, unknown[]>;
+      setOnlineCount(Object.keys(state).length);
+    };
+
+    channel.on('presence', { event: 'sync' }, updatePresence);
+    channel.on('presence', { event: 'join' }, updatePresence);
+    channel.on('presence', { event: 'leave' }, updatePresence);
+
+    channel.subscribe(async (status) => {
+      if (status !== 'SUBSCRIBED') return;
+      await channel.track({
+        user_id: user.id,
+        updated_at: new Date().toISOString(),
+      });
+    });
+
+    return () => {
+      isMounted = false;
+      void supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user) {
+      setTotalUsers(null);
+      return;
+    }
+
+    let isMounted = true;
+    const loadTotalUsers = async () => {
+      const { count, error } = await supabase
+        .from('profiles')
+        .select('id', { count: 'exact', head: true });
+      if (error) {
+        console.warn('Failed to load total users:', error.message);
+        return;
+      }
+      if (isMounted) {
+        setTotalUsers(count ?? 0);
+      }
+    };
+
+    void loadTotalUsers();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user?.id]);
 
   const refreshStats = useCallback(async (targetUserId?: string) => {
     const userId = targetUserId ?? user?.id;
@@ -462,6 +531,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         unlocks,
         unlockingEnabled,
         isLoading,
+        onlineCount,
+        totalUsers,
         login,
         signup,
         loginWithOAuth,
