@@ -21,6 +21,7 @@ import {
   VideoOff,
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -942,6 +943,8 @@ export default function DirectMessages() {
       ? 'Connected'
       : '';
   const callModeLabel = isVideoCall ? 'Video call' : 'Voice call';
+  const pendingRequestCount = friendRequests.length;
+  const pendingRequestBadge = pendingRequestCount > 9 ? '9+' : `${pendingRequestCount}`;
 
   return (
     <div className="h-full flex">
@@ -981,8 +984,13 @@ export default function DirectMessages() {
 
               <Dialog open={friendDialogOpen} onOpenChange={setFriendDialogOpen}>
                 <DialogTrigger asChild>
-                  <Button variant="ghost" size="icon">
+                  <Button variant="ghost" size="icon" className="relative">
                     <UserPlus className="w-5 h-5" />
+                    {pendingRequestCount > 0 && (
+                      <span className="absolute -right-1 -top-1 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
+                        {pendingRequestBadge}
+                      </span>
+                    )}
                   </Button>
                 </DialogTrigger>
                 <DialogContent className="sm:max-w-md">
@@ -1042,8 +1050,13 @@ export default function DirectMessages() {
           <div className="p-2">
             {(isLoadingRequests || friendRequests.length > 0) && (
               <div className="px-3 pt-2 pb-3">
-                <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
-                  Friend Requests
+                <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                  <span>Friend Requests</span>
+                  {pendingRequestCount > 0 && (
+                    <Badge variant="secondary" className="text-[10px]">
+                      {pendingRequestBadge}
+                    </Badge>
+                  )}
                 </div>
                 {isLoadingRequests && (
                   <div className="text-xs text-muted-foreground">Loading requests...</div>
@@ -1127,7 +1140,19 @@ export default function DirectMessages() {
                   />
                 </div>
                 <div>
-                  <h3 className="font-semibold">{selectedThread.user.name}</h3>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-semibold">{selectedThread.user.name}</h3>
+                    {selectedThread.isFriend && (
+                      <Badge variant="secondary" className="text-[10px] uppercase tracking-wide">
+                        Friend
+                      </Badge>
+                    )}
+                    {selectedThread.isHidden && (
+                      <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
+                        Ignored
+                      </Badge>
+                    )}
+                  </div>
                   <p className="text-xs text-muted-foreground">
                     {selectedEffectiveStatus === 'online'
                       ? 'Online'
