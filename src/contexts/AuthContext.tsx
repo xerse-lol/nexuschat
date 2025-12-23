@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useState, ReactNode } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 import { avatarDataUri, isSafeImageUrl } from '@/lib/avatar';
 import { defaultBannerId, defaultDecorationId } from '@/lib/profileStyles';
@@ -55,6 +55,7 @@ interface AuthContextType {
   isLoading: boolean;
   onlineCount: number | null;
   totalUsers: number | null;
+  getEffectiveStatus: (userId: string | null | undefined, status?: User['status'] | null) => User['status'];
   login: (email: string, password: string) => Promise<AuthResult>;
   signup: (email: string, password: string, username: string) => Promise<AuthResult>;
   loginWithOAuth: (provider: OAuthProvider) => Promise<AuthResult>;
@@ -172,6 +173,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [onlineCount, setOnlineCount] = useState<number | null>(null);
   const [totalUsers, setTotalUsers] = useState<number | null>(null);
+  const [onlineUserIds, setOnlineUserIds] = useState<string[]>([]);
+  const onlineUserIdSet = useMemo(() => new Set(onlineUserIds), [onlineUserIds]);
 
   const syncProfile = useCallback(async (nextUser: User) => {
     const { error } = await supabase.from('profiles').upsert({
@@ -222,6 +225,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!user) {
       setOnlineCount(null);
+      setOnlineUserIds([]);
       return;
     }
 
@@ -236,7 +240,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const updatePresence = () => {
       if (!isMounted) return;
       const state = channel.presenceState() as Record<string, unknown[]>;
-      setOnlineCount(Object.keys(state).length);
+      const ids = Object.keys(state);
+      setOnlineUserIds(ids);
+      setOnlineCount(ids.length);
     };
 
     channel.on('presence', { event: 'sync' }, updatePresence);
@@ -500,6 +506,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void supabase.auth.signOut();
   };
 
+  const getEffectiveStatus = useCallback(
+    (userId: string | null | undefined, status?: User['status'] | null): User['status'] => {
+      const baseStatus = status ?? 'online';
+      if (!userId) return baseStatus;
+      if (!onlineUserIdSet.has(userId)) return 'offline';
+      if (baseStatus === 'offline') return 'offline';
+      return baseStatus;
+    },
+    [onlineUserIdSet]
+  );
+
   const updateProfile = (updates: Partial<User>) => {
     if (user) {
       const updated = { ...user, ...updates };
@@ -533,6 +550,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLoading,
         onlineCount,
         totalUsers,
+        getEffectiveStatus,
         login,
         signup,
         loginWithOAuth,

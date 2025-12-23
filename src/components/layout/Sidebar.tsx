@@ -37,7 +37,8 @@ const bottomNavItems = [
 ];
 
 export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
-  const { user, logout } = useAuth();
+  const { user, logout, getEffectiveStatus } = useAuth();
+  const currentStatus = getEffectiveStatus(user?.id, user?.status);
 
   const statusColors = {
     online: 'bg-online',
@@ -152,7 +153,7 @@ export default function Sidebar({ activeTab, onTabChange }: SidebarProps) {
               <span 
                 className={cn(
                   "absolute bottom-0 right-0 w-4 h-4 rounded-full border-2 border-sidebar",
-                  statusColors[user?.status || 'offline']
+                  statusColors[currentStatus]
                 )}
               />
             </motion.div>

@@ -32,6 +32,7 @@ type RoomSummary = {
 type ThreadSummary = {
   id: string;
   user: {
+    id: string;
     name: string;
     username: string;
     avatar: string;
@@ -55,6 +56,7 @@ type RoomsRow = {
 
 type ThreadRow = {
   thread_id: string;
+  other_user_id: string;
   other_username: string | null;
   other_display_name: string | null;
   other_avatar: string | null;
@@ -62,7 +64,7 @@ type ThreadRow = {
 };
 
 export default function HomePage({ onNavigate }: HomePageProps) {
-  const { user, stats } = useAuth();
+  const { user, stats, getEffectiveStatus } = useAuth();
   const { toast } = useToast();
   const [trendingRooms, setTrendingRooms] = useState<RoomSummary[]>([]);
   const [recentConnections, setRecentConnections] = useState<ThreadSummary[]>([]);
@@ -110,6 +112,7 @@ export default function HomePage({ onNavigate }: HomePageProps) {
       return {
         id: thread.thread_id,
         user: {
+          id: thread.other_user_id,
           name,
           username,
           avatar,
@@ -284,7 +287,9 @@ export default function HomePage({ onNavigate }: HomePageProps) {
             </div>
           ) : (
             <div className="space-y-3">
-              {recentConnections.map((person, index) => (
+              {recentConnections.map((person, index) => {
+                const effectiveStatus = getEffectiveStatus(person.user.id, person.user.status);
+                return (
                 <motion.div
                   key={person.id}
                   initial={{ opacity: 0, x: 20 }}
@@ -301,19 +306,20 @@ export default function HomePage({ onNavigate }: HomePageProps) {
                     <span
                       className={cn(
                         "absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-card",
-                        statusColors[person.user.status]
+                        statusColors[effectiveStatus]
                       )}
                     />
                   </div>
                   <div className="flex-1">
                     <p className="font-medium">{person.user.name}</p>
-                    <p className="text-xs text-muted-foreground capitalize">{person.user.status}</p>
+                    <p className="text-xs text-muted-foreground capitalize">{effectiveStatus}</p>
                   </div>
                   <Button variant="ghost" size="icon" className="h-8 w-8">
                     <MessageSquare className="w-4 h-4" />
                   </Button>
                 </motion.div>
-              ))}
+                );
+              })}
             </div>
           )}
         </motion.div>
