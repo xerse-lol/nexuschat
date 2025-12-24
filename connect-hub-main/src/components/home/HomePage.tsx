@@ -11,6 +11,7 @@ import {
   ShoppingBag
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useAuth } from '@/contexts/AuthContext';
 import { avatarDataUri, isSafeImageUrl } from '@/lib/avatar';
@@ -32,6 +33,7 @@ type RoomSummary = {
 type ThreadSummary = {
   id: string;
   user: {
+    id: string;
     name: string;
     username: string;
     avatar: string;
@@ -55,6 +57,7 @@ type RoomsRow = {
 
 type ThreadRow = {
   thread_id: string;
+  other_user_id: string;
   other_username: string | null;
   other_display_name: string | null;
   other_avatar: string | null;
@@ -62,7 +65,7 @@ type ThreadRow = {
 };
 
 export default function HomePage({ onNavigate }: HomePageProps) {
-  const { user, stats } = useAuth();
+  const { user, stats, getEffectiveStatus } = useAuth();
   const { toast } = useToast();
   const [trendingRooms, setTrendingRooms] = useState<RoomSummary[]>([]);
   const [recentConnections, setRecentConnections] = useState<ThreadSummary[]>([]);
@@ -110,6 +113,7 @@ export default function HomePage({ onNavigate }: HomePageProps) {
       return {
         id: thread.thread_id,
         user: {
+          id: thread.other_user_id,
           name,
           username,
           avatar,
@@ -261,62 +265,133 @@ export default function HomePage({ onNavigate }: HomePageProps) {
           )}
         </motion.div>
 
-        {/* Recent Connections */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-          className="bg-card rounded-2xl border border-border p-6"
-        >
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-2">
-              <Clock className="w-5 h-5 text-primary" />
-              <h2 className="font-display font-semibold text-lg">Recent</h2>
+        <div className="space-y-6">
+          {/* Community Rules */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.25 }}
+            className="bg-card rounded-2xl border border-border p-6"
+          >
+            <div className="flex items-center gap-2 mb-4">
+              <Sparkles className="w-5 h-5 text-primary" />
+              <h2 className="font-display font-semibold text-lg">Community Rules</h2>
             </div>
-            <Button variant="ghost" size="sm" onClick={() => onNavigate('messages')}>
-              View All
-            </Button>
-          </div>
-
-          {recentConnections.length === 0 ? (
-            <div className="text-sm text-muted-foreground">
-              No recent conversations yet.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {recentConnections.map((person, index) => (
-                <motion.div
-                  key={person.id}
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.4 + index * 0.1 }}
-                  className="flex items-center gap-3 p-3 rounded-xl hover:bg-secondary transition-colors cursor-pointer"
-                  onClick={() => onNavigate('messages')}
-                >
-                  <div className="relative">
-                    <Avatar>
-                      <AvatarImage src={person.user.avatar} />
-                      <AvatarFallback>{person.user.name.charAt(0)}</AvatarFallback>
-                    </Avatar>
-                    <span
-                      className={cn(
-                        "absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-card",
-                        statusColors[person.user.status]
-                      )}
-                    />
-                  </div>
-                  <div className="flex-1">
-                    <p className="font-medium">{person.user.name}</p>
-                    <p className="text-xs text-muted-foreground capitalize">{person.user.status}</p>
-                  </div>
-                  <Button variant="ghost" size="icon" className="h-8 w-8">
-                    <MessageSquare className="w-4 h-4" />
+            <p className="text-sm text-muted-foreground mb-4">
+              This is an 18+ platform. Be respectful, stay legal, and keep it safe for everyone.
+            </p>
+            <ul className="space-y-2 text-sm text-muted-foreground">
+              <li>18+ only. No minors, grooming, or sexual content involving minors.</li>
+              <li>No hate or extremist content (including Nazi content), threats, or harassment.</li>
+              <li>Consent required. Stop if someone says no or wants to leave.</li>
+              <li>No non-consensual recording, sharing, or doxxing of personal info.</li>
+              <li>No illegal content, scams, malware, or impersonation/deepfakes.</li>
+              <li>No spam, bots, or mass advertising.</li>
+              <li>No graphic gore or encouragement of self-harm.</li>
+            </ul>
+            <div className="mt-4">
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button variant="ghost" size="sm">
+                    Read full Terms
                   </Button>
-                </motion.div>
-              ))}
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-lg">
+                  <DialogHeader>
+                    <DialogTitle>Terms of Service (Summary)</DialogTitle>
+                    <DialogDescription>
+                      By using Nexuschat you agree to the rules below.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4 text-sm text-muted-foreground">
+                    <p>
+                      You must be 18+ to use this service. We do not allow minors or any content
+                      involving minors.
+                    </p>
+                    <ul className="list-disc pl-5 space-y-2">
+                      <li>No child sexual exploitation, grooming, or sexual content involving minors.</li>
+                      <li>No hate or extremist ideology promotion (including Nazi content).</li>
+                      <li>No harassment, threats, stalking, or targeted abuse.</li>
+                      <li>Consent required. Stop if someone says no or wants to leave.</li>
+                      <li>No coercion, extortion, or blackmail.</li>
+                      <li>No non-consensual recording, streaming, or distribution of content.</li>
+                      <li>No doxxing or sharing personal information without consent.</li>
+                      <li>No illegal activity, scams, malware, impersonation, or deepfakes.</li>
+                      <li>No drug or weapon sales, or facilitation of illegal transactions.</li>
+                      <li>No graphic gore or encouragement of self-harm.</li>
+                      <li>No spam, bots, or mass advertising.</li>
+                      <li>No ban evasion or misuse of the platform.</li>
+                    </ul>
+                    <p>
+                      Enforcement includes warnings, suspension, permanent bans, and reporting to
+                      authorities when required by law.
+                    </p>
+                  </div>
+                </DialogContent>
+              </Dialog>
             </div>
-          )}
-        </motion.div>
+          </motion.div>
+
+          {/* Recent Connections */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+            className="bg-card rounded-2xl border border-border p-6"
+          >
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-2">
+                <Clock className="w-5 h-5 text-primary" />
+                <h2 className="font-display font-semibold text-lg">Recent</h2>
+              </div>
+              <Button variant="ghost" size="sm" onClick={() => onNavigate('messages')}>
+                View All
+              </Button>
+            </div>
+
+            {recentConnections.length === 0 ? (
+              <div className="text-sm text-muted-foreground">
+                No recent conversations yet.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {recentConnections.map((person, index) => {
+                  const effectiveStatus = getEffectiveStatus(person.user.id, person.user.status);
+                  return (
+                  <motion.div
+                    key={person.id}
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.4 + index * 0.1 }}
+                    className="flex items-center gap-3 p-3 rounded-xl hover:bg-secondary transition-colors cursor-pointer"
+                    onClick={() => onNavigate('messages')}
+                  >
+                    <div className="relative">
+                      <Avatar>
+                        <AvatarImage src={person.user.avatar} />
+                        <AvatarFallback>{person.user.name.charAt(0)}</AvatarFallback>
+                      </Avatar>
+                      <span
+                        className={cn(
+                          "absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-card",
+                          statusColors[effectiveStatus]
+                        )}
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-medium">{person.user.name}</p>
+                      <p className="text-xs text-muted-foreground capitalize">{effectiveStatus}</p>
+                    </div>
+                    <Button variant="ghost" size="icon" className="h-8 w-8">
+                      <MessageSquare className="w-4 h-4" />
+                    </Button>
+                  </motion.div>
+                  );
+                })}
+              </div>
+            )}
+          </motion.div>
+        </div>
       </div>
 
       {/* Stats Banner */}
