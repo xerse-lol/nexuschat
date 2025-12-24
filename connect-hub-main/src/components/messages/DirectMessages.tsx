@@ -213,12 +213,22 @@ const EMOJI_GROUPS = [
   },
 ];
 
+const toEmoji = (code: number) => {
+  if (typeof String.fromCodePoint === 'function') {
+    return String.fromCodePoint(code);
+  }
+  return String.fromCharCode(code);
+};
+
 const EMOJI_GROUPS_RENDER = EMOJI_GROUPS.map((group) => ({
   label: group.label,
-  emojis: group.codes.map((code) => String.fromCodePoint(code)),
+  emojis: group.codes.map(toEmoji),
 }));
 
-const REACTION_EMOJIS = EMOJI_GROUPS_RENDER.flatMap((group) => group.emojis);
+const REACTION_EMOJIS = EMOJI_GROUPS_RENDER.reduce<string[]>(
+  (acc, group) => acc.concat(group.emojis),
+  []
+);
 
 const createAttachmentId = () => {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
