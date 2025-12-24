@@ -173,7 +173,13 @@ const EMOJI_CODES = [
   0x1f389, 0x1f525, 0x1f4aa, 0x1f44c, 0x1f64c, 0x1f62d, 0x1f62e, 0x1f622, 0x1f623, 0x1f625,
   0x1f614, 0x1f62a, 0x1f611, 0x1f636, 0x1f970, 0x1f973, 0x1f9e1, 0x2764, 0x1f680,
 ];
-const EMOJIS = EMOJI_CODES.map((code) => String.fromCodePoint(code));
+const toEmoji = (code: number) => {
+  if (typeof String.fromCodePoint === 'function') {
+    return String.fromCodePoint(code);
+  }
+  return String.fromCharCode(code);
+};
+const EMOJIS = EMOJI_CODES.map(toEmoji);
 
 const createAttachmentId = () => {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
@@ -186,6 +192,19 @@ const toAttachmentKind = (file: File): PendingAttachment['kind'] => {
   if (file.type.startsWith('image/')) return 'image';
   if (file.type.startsWith('video/')) return 'video';
   return 'file';
+};
+
+const safeMap = <T, R>(
+  value: T[] | null | undefined,
+  mapper: ((item: T) => R) | null | undefined,
+  label: string
+): R[] => {
+  if (!Array.isArray(value)) return [];
+  if (typeof mapper !== 'function') {
+    console.error(`[DirectMessages] ${label} mapper is not a function`, mapper);
+    return [];
+  }
+  return value.map(mapper);
 };
 
 const normalizeAttachments = (value: unknown): Attachment[] => {
@@ -357,7 +376,7 @@ export default function DirectMessages() {
       return;
     }
 
-    const mapped = (data as ThreadRow[] | null)?.map(mapThreadRow) ?? [];
+    const mapped = safeMap(data as ThreadRow[] | null, mapThreadRow, 'thread rows');
     setThreads(mapped);
     setIsLoadingThreads(false);
 
@@ -383,7 +402,7 @@ export default function DirectMessages() {
       return;
     }
 
-    const mapped = (data as FriendRequestRow[] | null)?.map(mapFriendRequestRow) ?? [];
+    const mapped = safeMap(data as FriendRequestRow[] | null, mapFriendRequestRow, 'friend request rows');
     setFriendRequests(mapped);
     setIsLoadingRequests(false);
   }, [mapFriendRequestRow, user]);
@@ -412,7 +431,7 @@ export default function DirectMessages() {
         return;
       }
 
-      const mapped = (data as MessageRow[] | null)?.map(mapMessageRow) ?? [];
+      const mapped = safeMap(data as MessageRow[] | null, mapMessageRow, 'message rows');
       setMessages(mapped);
       setIsLoadingMessages(false);
     },
