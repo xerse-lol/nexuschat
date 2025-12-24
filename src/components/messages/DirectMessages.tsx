@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -9,6 +9,8 @@ import {
   MoreVertical,
   Phone,
   Video,
+  X,
+  FileText,
   MessageSquarePlus,
   UserPlus,
   UserMinus,
@@ -45,7 +47,23 @@ interface Message {
   sender: 'me' | 'them';
   senderId: string;
   timestamp: Date;
+  attachments: Attachment[];
 }
+
+type Attachment = {
+  url: string;
+  type: string;
+  name: string;
+  size: number;
+  path?: string;
+};
+
+type PendingAttachment = {
+  id: string;
+  file: File;
+  previewUrl?: string;
+  kind: 'image' | 'video' | 'file';
+};
 
 interface ThreadSummary {
   id: string;
@@ -82,6 +100,7 @@ type MessageRow = {
   content: string;
   sender_id: string;
   created_at: string;
+  attachments: unknown;
 };
 
 type FriendRequestRow = {
@@ -146,6 +165,58 @@ const getIceConfig = (): RTCConfiguration => {
   };
 };
 
+const ATTACHMENT_BUCKET = 'dm-attachments';
+const MAX_ATTACHMENTS = 4;
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const EMOJI_CODES = [
+  0x1f600, 0x1f603, 0x1f604, 0x1f60a, 0x1f60d, 0x1f618, 0x1f61c, 0x1f61d, 0x1f44d, 0x1f44f,
+  0x1f389, 0x1f525, 0x1f4aa, 0x1f44c, 0x1f64c, 0x1f62d, 0x1f62e, 0x1f622, 0x1f623, 0x1f625,
+  0x1f614, 0x1f62a, 0x1f611, 0x1f636, 0x1f970, 0x1f973, 0x1f9e1, 0x2764, 0x1f680,
+];
+const EMOJIS = EMOJI_CODES.map((code) => String.fromCodePoint(code));
+
+const createAttachmentId = () => {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+};
+
+const toAttachmentKind = (file: File): PendingAttachment['kind'] => {
+  if (file.type.startsWith('image/')) return 'image';
+  if (file.type.startsWith('video/')) return 'video';
+  return 'file';
+};
+
+const normalizeAttachments = (value: unknown): Attachment[] => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const record = item as Record<string, unknown>;
+      const url = typeof record.url === 'string' ? record.url : '';
+      if (!url) return null;
+      const type = typeof record.type === 'string' ? record.type : 'application/octet-stream';
+      const name = typeof record.name === 'string' ? record.name : 'Attachment';
+      const size = typeof record.size === 'number' ? record.size : 0;
+      const path = typeof record.path === 'string' ? record.path : undefined;
+      return { url, type, name, size, path };
+    })
+    .filter(Boolean) as Attachment[];
+};
+
+const formatBytes = (bytes: number) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+};
+
 export default function DirectMessages() {
   const { user, awardMessagePoint, getEffectiveStatus } = useAuth();
   const { toast } = useToast();
@@ -184,6 +255,10 @@ export default function DirectMessages() {
   const pendingCallIceRef = useRef<RTCIceCandidateInit[]>([]);
   const callLocalVideoRef = useRef<HTMLVideoElement | null>(null);
   const callRemoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const statusColors = {
     online: 'bg-online',
@@ -214,6 +289,12 @@ export default function DirectMessages() {
     const avatar = isSafeImageUrl(row.other_avatar)
       ? row.other_avatar || avatarDataUri(username)
       : avatarDataUri(username);
+    const lastMessageValue = row.last_message?.trim();
+    const lastMessage = lastMessageValue
+      ? lastMessageValue
+      : row.last_message_at
+      ? 'Attachment'
+      : 'No messages yet';
 
     return {
       id: row.thread_id,
@@ -224,7 +305,7 @@ export default function DirectMessages() {
         avatar,
         status: row.other_status || 'offline',
       },
-      lastMessage: row.last_message || 'No messages yet',
+      lastMessage,
       lastMessageAt: row.last_message_at ? new Date(row.last_message_at) : null,
       unread: row.unread_count ?? 0,
       isHidden: Boolean(row.is_hidden),
@@ -239,6 +320,7 @@ export default function DirectMessages() {
       sender: row.sender_id === user?.id ? 'me' : 'them',
       senderId: row.sender_id,
       timestamp: new Date(row.created_at),
+      attachments: normalizeAttachments(row.attachments),
     }),
     [user?.id]
   );
@@ -315,10 +397,10 @@ export default function DirectMessages() {
       if (!user) return;
       setIsLoadingMessages(true);
       const { data, error } = await supabase
-        .from('direct_messages')
-        .select('id, content, sender_id, created_at')
-        .eq('thread_id', threadId)
-        .order('created_at', { ascending: true });
+      .from('direct_messages')
+      .select('id, content, sender_id, created_at, attachments')
+      .eq('thread_id', threadId)
+      .order('created_at', { ascending: true });
 
       if (error) {
         toast({
@@ -429,9 +511,119 @@ export default function DirectMessages() {
     };
   }, [loadFriendRequests, user?.id]);
 
+  const clearPendingAttachments = useCallback(() => {
+    setPendingAttachments((prev) => {
+      prev.forEach((item) => {
+        if (item.previewUrl) {
+          URL.revokeObjectURL(item.previewUrl);
+        }
+      });
+      return [];
+    });
+  }, []);
+
+  const removePendingAttachment = (id: string) => {
+    setPendingAttachments((prev) => {
+      const target = prev.find((item) => item.id === id);
+      if (target?.previewUrl) {
+        URL.revokeObjectURL(target.previewUrl);
+      }
+      return prev.filter((item) => item.id !== id);
+    });
+  };
+
+  const handleFileInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    if (files.length === 0) return;
+    setPendingAttachments((prev) => {
+      const remainingSlots = Math.max(0, MAX_ATTACHMENTS - prev.length);
+      if (remainingSlots === 0) {
+        toast({
+          title: 'Attachment limit reached',
+          description: `You can only send up to ${MAX_ATTACHMENTS} files at once.`,
+          variant: 'destructive',
+        });
+        return prev;
+      }
+
+      const next: PendingAttachment[] = [];
+      for (const file of files) {
+        if (next.length >= remainingSlots) break;
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+          toast({
+            title: 'File too large',
+            description: `${file.name} exceeds ${Math.round(MAX_ATTACHMENT_BYTES / (1024 * 1024))} MB.`,
+            variant: 'destructive',
+          });
+          continue;
+        }
+        const kind = toAttachmentKind(file);
+        const previewUrl = kind === 'image' ? URL.createObjectURL(file) : undefined;
+        next.push({
+          id: createAttachmentId(),
+          file,
+          previewUrl,
+          kind,
+        });
+      }
+
+      event.target.value = '';
+      return [...prev, ...next];
+    });
+  };
+
+  const uploadAttachment = async (item: PendingAttachment): Promise<Attachment | null> => {
+    if (!user || !selectedThreadId) return null;
+    const safeName = item.file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
+    const filePath = `${user.id}/${selectedThreadId}/${Date.now()}-${createAttachmentId()}-${safeName}`;
+    const { error } = await supabase.storage.from(ATTACHMENT_BUCKET).upload(filePath, item.file, {
+      contentType: item.file.type || 'application/octet-stream',
+      upsert: false,
+    });
+
+    if (error) {
+      toast({
+        title: 'Upload failed',
+        description: error.message,
+        variant: 'destructive',
+      });
+      return null;
+    }
+
+    const { data } = supabase.storage.from(ATTACHMENT_BUCKET).getPublicUrl(filePath);
+    return {
+      url: data.publicUrl,
+      path: filePath,
+      name: item.file.name,
+      type: item.file.type || 'application/octet-stream',
+      size: item.file.size,
+    };
+  };
+
+  useEffect(() => {
+    if (!selectedThreadId) {
+      clearPendingAttachments();
+      setEmojiOpen(false);
+      return;
+    }
+    clearPendingAttachments();
+    setEmojiOpen(false);
+  }, [clearPendingAttachments, selectedThreadId]);
+
   const handleSendMessage = async () => {
     const trimmed = messageInput.trim();
-    if (!trimmed || !selectedThreadId || !user) return;
+    if ((!trimmed && pendingAttachments.length === 0) || !selectedThreadId || !user || isUploading) return;
+
+    setIsUploading(true);
+    const attachments: Attachment[] = [];
+    for (const item of pendingAttachments) {
+      const uploaded = await uploadAttachment(item);
+      if (!uploaded) {
+        setIsUploading(false);
+        return;
+      }
+      attachments.push(uploaded);
+    }
 
     const { data, error } = await supabase
       .from('direct_messages')
@@ -439,11 +631,13 @@ export default function DirectMessages() {
         thread_id: selectedThreadId,
         sender_id: user.id,
         content: trimmed,
+        attachments,
       })
-      .select('id, content, sender_id, created_at')
+      .select('id, content, sender_id, created_at, attachments')
       .single();
 
     if (error) {
+      setIsUploading(false);
       toast({
         title: 'Message failed',
         description: error.message,
@@ -455,8 +649,11 @@ export default function DirectMessages() {
     const nextMessage = mapMessageRow(data as MessageRow);
     setMessages((prev) => [...prev, nextMessage]);
     setMessageInput('');
+    clearPendingAttachments();
+    setEmojiOpen(false);
     void awardMessagePoint();
     void loadThreads();
+    setIsUploading(false);
   };
 
   const handleSendFriendRequest = async () => {
@@ -929,6 +1126,57 @@ export default function DirectMessages() {
     return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
   };
 
+  const renderAttachment = (attachment: Attachment, isMine: boolean) => {
+    const isImage = attachment.type.startsWith('image/');
+    const isVideo = attachment.type.startsWith('video/');
+    const sizeLabel = formatBytes(attachment.size);
+    const fileLabel = attachment.name || 'Attachment';
+
+    if (isImage) {
+      return (
+        <img
+          src={attachment.url}
+          alt={fileLabel}
+          loading="lazy"
+          className={cn(
+            'max-h-56 w-full rounded-xl border object-cover',
+            isMine ? 'border-white/20' : 'border-border'
+          )}
+        />
+      );
+    }
+
+    if (isVideo) {
+      return (
+        <video
+          src={attachment.url}
+          controls
+          preload="metadata"
+          className={cn(
+            'max-h-64 w-full rounded-xl border bg-black/80',
+            isMine ? 'border-white/20' : 'border-border'
+          )}
+        />
+      );
+    }
+
+    return (
+      <a
+        href={attachment.url}
+        target="_blank"
+        rel="noreferrer"
+        className={cn(
+          'flex items-center gap-2 rounded-lg border px-3 py-2 text-xs transition hover:bg-secondary/40',
+          isMine ? 'border-white/20 text-primary-foreground/90' : 'border-border text-foreground'
+        )}
+      >
+        <FileText className="h-4 w-4" />
+        <span className="max-w-[10rem] truncate">{fileLabel}</span>
+        {sizeLabel ? <span className="ml-auto text-[10px] text-muted-foreground">{sizeLabel}</span> : null}
+      </a>
+    );
+  };
+
   const isCallActive = callPhase === 'connecting' || callPhase === 'in_call';
   const isVideoCall = callMode === 'video';
   const callTitle = selectedThread?.user.name ?? 'User';
@@ -1230,7 +1478,16 @@ export default function DirectMessages() {
                             : 'bg-secondary text-secondary-foreground rounded-bl-md'
                         )}
                       >
-                        <p>{msg.content}</p>
+                        {msg.content ? <p>{msg.content}</p> : null}
+                        {msg.attachments.length > 0 && (
+                          <div className={cn('space-y-2', msg.content ? 'mt-2' : 'mt-1')}>
+                            {msg.attachments.map((attachment, attachmentIndex) => (
+                              <div key={`${msg.id}-attachment-${attachmentIndex}`}>
+                                {renderAttachment(attachment, msg.sender === 'me')}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         <p
                           className={cn(
                             "text-xs mt-1",
@@ -1251,8 +1508,55 @@ export default function DirectMessages() {
 
             {/* Message Input */}
             <div className="p-4 border-t border-border">
+              {pendingAttachments.length > 0 && (
+                <div className="mb-3 flex flex-wrap gap-2">
+                  {pendingAttachments.map((item) => (
+                    <div
+                      key={item.id}
+                      className="relative h-20 w-20 overflow-hidden rounded-xl border border-border bg-secondary"
+                    >
+                      {item.kind === 'image' && item.previewUrl ? (
+                        <img
+                          src={item.previewUrl}
+                          alt={item.file.name}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-center text-[10px] text-muted-foreground">
+                          {item.kind === 'video' ? (
+                            <Video className="h-5 w-5" />
+                          ) : (
+                            <FileText className="h-5 w-5" />
+                          )}
+                          <span className="px-1 truncate max-w-[4.5rem]">{item.file.name}</span>
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => removePendingAttachment(item.id)}
+                        className="absolute right-1 top-1 rounded-full bg-background/80 p-1 text-muted-foreground hover:text-foreground"
+                        aria-label="Remove attachment"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="flex items-center gap-3">
-                <Button variant="ghost" size="icon">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  onChange={handleFileInputChange}
+                  className="hidden"
+                />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isUploading}
+                >
                   <Paperclip className="w-5 h-5" />
                 </Button>
                 <Input
@@ -1262,13 +1566,32 @@ export default function DirectMessages() {
                   onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
                   className="flex-1 bg-secondary border-0"
                 />
-                <Button variant="ghost" size="icon">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setEmojiOpen((prev) => !prev)}
+                  disabled={isUploading}
+                >
                   <Smile className="w-5 h-5" />
                 </Button>
-                <Button variant="hero" size="icon" onClick={handleSendMessage}>
+                <Button variant="hero" size="icon" onClick={handleSendMessage} disabled={isUploading}>
                   <Send className="w-5 h-5" />
                 </Button>
               </div>
+              {emojiOpen && (
+                <div className="mt-3 grid grid-cols-10 gap-1 rounded-xl border border-border bg-secondary p-3">
+                  {EMOJIS.map((emoji, index) => (
+                    <button
+                      key={`${emoji}-${index}`}
+                      type="button"
+                      className="rounded-md p-1 text-lg hover:bg-secondary/70"
+                      onClick={() => setMessageInput((prev) => `${prev}${emoji}`)}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </>
         ) : (
