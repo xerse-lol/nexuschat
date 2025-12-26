@@ -1167,34 +1167,6 @@ export default function DirectMessages() {
     }
   }, []);
 
-  const attemptIceRestart = useCallback(async () => {
-    const pc = callPeerRef.current;
-    if (!pc || !user) return;
-    if (iceRestartedRef.current || !callOffererRef.current) {
-      toast({
-        title: 'Call ended',
-        description: 'Connection failed. Please try again.',
-        variant: 'destructive',
-      });
-      await cleanupCall();
-      return;
-    }
-
-    iceRestartedRef.current = true;
-    try {
-      const offer = await pc.createOffer({ iceRestart: true });
-      await pc.setLocalDescription(offer);
-      await sendCallSignal({ type: 'offer', from: user.id, mode: callMode, sdp: offer });
-    } catch (error) {
-      toast({
-        title: 'Call ended',
-        description: 'Unable to restore the connection.',
-        variant: 'destructive',
-      });
-      await cleanupCall();
-    }
-  }, [callMode, cleanupCall, sendCallSignal, toast, user]);
-
   const cleanupCall = useCallback(async () => {
     pendingCallIceRef.current = [];
     callOffererRef.current = false;
@@ -1239,6 +1211,34 @@ export default function DirectMessages() {
       callRemoteVideoRef.current.srcObject = null;
     }
   }, []);
+
+  const attemptIceRestart = useCallback(async () => {
+    const pc = callPeerRef.current;
+    if (!pc || !user) return;
+    if (iceRestartedRef.current || !callOffererRef.current) {
+      toast({
+        title: 'Call ended',
+        description: 'Connection failed. Please try again.',
+        variant: 'destructive',
+      });
+      await cleanupCall();
+      return;
+    }
+
+    iceRestartedRef.current = true;
+    try {
+      const offer = await pc.createOffer({ iceRestart: true });
+      await pc.setLocalDescription(offer);
+      await sendCallSignal({ type: 'offer', from: user.id, mode: callMode, sdp: offer });
+    } catch (error) {
+      toast({
+        title: 'Call ended',
+        description: 'Unable to restore the connection.',
+        variant: 'destructive',
+      });
+      await cleanupCall();
+    }
+  }, [callMode, cleanupCall, sendCallSignal, toast, user]);
 
   const prepareCallConnection = useCallback(
     async (mode: CallMode, isOfferer: boolean) => {
