@@ -1609,6 +1609,7 @@ begin
 end;
 $$;
 
+drop function if exists public.get_my_ban_status();
 create or replace function public.get_my_ban_status()
 returns table (
   is_banned boolean,
@@ -1626,9 +1627,9 @@ begin
 
   return query
   select
-    true as is_banned,
-    b.reason,
-    b.expires_at
+    true::boolean as is_banned,
+    b.reason::text,
+    b.expires_at::timestamptz
   from public.admin_bans b
   where b.scope = 'user'
     and b.target_user_id = auth.uid()
@@ -1638,7 +1639,7 @@ begin
   limit 1;
 
   if not found then
-    return query select false, null, null;
+    return query select false::boolean, null::text, null::timestamptz;
   end if;
 end;
 $$;
