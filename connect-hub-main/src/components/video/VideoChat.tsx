@@ -1135,15 +1135,8 @@ export default function VideoChat() {
               </div>
             </div>
           )}
-          <div className="absolute bottom-4 left-4 flex flex-col gap-2">
-            <div className="px-3 py-1.5 rounded-full glass text-sm">You</div>
-            {isAdmin && (
-              <div className="flex items-center gap-2 rounded-full glass px-3 py-1.5 text-xs">
-                <Eye className="h-3.5 w-3.5 text-primary" />
-                <span className="text-muted-foreground">Shadow mode</span>
-                <Switch checked={shadowMode} onCheckedChange={handleShadowToggle} />
-              </div>
-            )}
+          <div className="absolute bottom-4 left-4 px-3 py-1.5 rounded-full glass text-sm">
+            You
           </div>
           <Button
             variant="ghost"
@@ -1359,63 +1352,73 @@ export default function VideoChat() {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="flex items-center justify-center gap-4 py-4"
+        className="flex items-center gap-4 py-4"
       >
-        <Button
-          variant={videoEnabled ? "secondary" : "destructive"}
-          size="icon"
-          className="w-14 h-14 rounded-full"
-          onClick={toggleVideo}
-          disabled={shadowMode}
-        >
-          {videoEnabled ? <Video className="w-6 h-6" /> : <VideoOff className="w-6 h-6" />}
-        </Button>
+        {isAdmin && (
+          <div className="flex items-center gap-2 rounded-full glass px-3 py-2 text-xs">
+            <Eye className="h-4 w-4 text-primary" />
+            <span className="text-muted-foreground">Shadow</span>
+            <Switch checked={shadowMode} onCheckedChange={handleShadowToggle} />
+          </div>
+        )}
 
-        <Button
-          variant={audioEnabled ? "secondary" : "destructive"}
-          size="icon"
-          className="w-14 h-14 rounded-full"
-          onClick={toggleAudio}
-          disabled={shadowMode}
-        >
-          {audioEnabled ? <Mic className="w-6 h-6" /> : <MicOff className="w-6 h-6" />}
-        </Button>
+        <div className="flex-1 flex items-center justify-center gap-4">
+          <Button
+            variant={videoEnabled ? "secondary" : "destructive"}
+            size="icon"
+            className="w-14 h-14 rounded-full"
+            onClick={toggleVideo}
+            disabled={shadowMode}
+          >
+            {videoEnabled ? <Video className="w-6 h-6" /> : <VideoOff className="w-6 h-6" />}
+          </Button>
 
-        {(isConnected || isConnecting) && (
-          <>
-            {isConnected && (
+          <Button
+            variant={audioEnabled ? "secondary" : "destructive"}
+            size="icon"
+            className="w-14 h-14 rounded-full"
+            onClick={toggleAudio}
+            disabled={shadowMode}
+          >
+            {audioEnabled ? <Mic className="w-6 h-6" /> : <MicOff className="w-6 h-6" />}
+          </Button>
+
+          {(isConnected || isConnecting) && (
+            <>
+              {isConnected && (
+                <Button
+                  variant="hero"
+                  size="icon"
+                  className="w-14 h-14 rounded-full"
+                  onClick={skipPartner}
+                >
+                  <SkipForward className="w-6 h-6" />
+                </Button>
+              )}
+
               <Button
-                variant="hero"
+                variant="destructive"
                 size="icon"
                 className="w-14 h-14 rounded-full"
-                onClick={skipPartner}
+                onClick={disconnect}
               >
-                <SkipForward className="w-6 h-6" />
+                <PhoneOff className="w-6 h-6" />
               </Button>
-            )}
+            </>
+          )}
 
-            <Button
-              variant="destructive"
-              size="icon"
-              className="w-14 h-14 rounded-full"
-              onClick={disconnect}
-            >
-              <PhoneOff className="w-6 h-6" />
+          {!isConnected && !isSearching && !isConnecting && (
+            <Button variant="hero" size="lg" onClick={startSearching}>
+              Start Chatting
             </Button>
-          </>
-        )}
+          )}
 
-        {!isConnected && !isSearching && !isConnecting && (
-          <Button variant="hero" size="lg" onClick={startSearching}>
-            Start Chatting
-          </Button>
-        )}
-
-        {isSearching && (
-          <Button variant="outline" size="lg" onClick={stopSearching}>
-            Cancel
-          </Button>
-        )}
+          {isSearching && (
+            <Button variant="outline" size="lg" onClick={stopSearching}>
+              Cancel
+            </Button>
+          )}
+        </div>
       </motion.div>
     </div>
   );
