@@ -7,6 +7,8 @@ import {
   Sparkles,
   Lock,
   Crown,
+  Shield,
+  ShieldCheck,
   Trophy,
   MessageSquare,
   Video,
@@ -42,7 +44,7 @@ const statusOptions = [
 ];
 
 export default function ProfilePage() {
-  const { user, updateProfile, stats, unlocks, purchaseStyle, unlockingEnabled } = useAuth();
+  const { user, updateProfile, stats, unlocks, purchaseStyle, unlockingEnabled, adminRole } = useAuth();
   const { toast } = useToast();
   
   const [isEditing, setIsEditing] = useState(false);
@@ -93,6 +95,23 @@ export default function ProfilePage() {
   const visibleBanners = showAllBanners ? bannerStyles : bannerStyles.slice(0, 12);
   const visibleDecorations = showAllDecorations ? avatarDecorations : avatarDecorations.slice(0, 12);
   const profileBadges = [
+    ...(adminRole === 'owner'
+      ? [{
+        id: 'owner',
+        label: 'Owner',
+        icon: ShieldCheck,
+        className: 'bg-gradient-to-r from-amber-300 via-yellow-400 to-orange-500 text-slate-950 shadow-[0_0_18px_rgba(250,204,21,0.35)]',
+        iconClassName: 'text-slate-950',
+      }]
+      : adminRole === 'admin'
+      ? [{
+        id: 'admin',
+        label: 'Admin',
+        icon: Shield,
+        className: 'bg-gradient-to-r from-cyan-300 via-sky-400 to-indigo-500 text-slate-950 shadow-[0_0_18px_rgba(56,189,248,0.35)]',
+        iconClassName: 'text-slate-950',
+      }]
+      : []),
     ...(hasGalaxy ? [{
       id: 'galaxy',
       label: 'Galaxy Beta',

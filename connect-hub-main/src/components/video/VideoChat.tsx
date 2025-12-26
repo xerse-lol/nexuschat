@@ -13,7 +13,9 @@ import {
   Monitor,
   Camera,
   Volume2,
-  Users
+  Users,
+  Shield,
+  Ban
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -32,6 +34,10 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import AdminPanel from '@/components/admin/AdminPanel';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 import { avatarDataUri, isSafeImageUrl } from '@/lib/avatar';
@@ -169,8 +175,13 @@ export default function VideoChat() {
   const searchAttemptsRef = useRef(0);
   const matchIdRef = useRef<string | null>(null);
   
-  const { user, awardCallPoint, onlineCount, totalUsers } = useAuth();
+  const { user, awardCallPoint, onlineCount, totalUsers, isAdmin, banStatus } = useAuth();
   const { toast } = useToast();
+  const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
+  const [isReportOpen, setIsReportOpen] = useState(false);
+  const [reportReason, setReportReason] = useState('');
+  const [reportDetails, setReportDetails] = useState('');
+  const [isSubmittingReport, setIsSubmittingReport] = useState(false);
   const isConnecting = Boolean(matchId) && !isSearching && !isConnected;
   const offlineCount = totalUsers !== null && onlineCount !== null
     ? Math.max(totalUsers - onlineCount, 0)
@@ -179,6 +190,10 @@ export default function VideoChat() {
   const animatedOfflineCount = useAnimatedCount(offlineCount);
   const animatedTotalUsers = useAnimatedCount(totalUsers);
   const formatCount = (value: number | null) => (value === null ? '—' : value.toString());
+  const isBanned = Boolean(banStatus?.isBanned);
+  const banExpiresLabel = banStatus?.expiresAt
+    ? new Date(banStatus.expiresAt).toLocaleString()
+    : 'Permanent';
 
   useEffect(() => {
     getMediaDevices();
@@ -742,6 +757,16 @@ export default function VideoChat() {
   }, [loadPartnerProfile, setupPeerConnection, toast]);
 
   const startSearching = async () => {
+    if (isBanned) {
+      toast({
+        title: 'Access restricted',
+        description: banStatus?.reason
+          ? `Banned: ${banStatus.reason}`
+          : 'Your account is currently restricted.',
+        variant: 'destructive',
+      });
+      return;
+    }
     await cleanupPeerConnection();
     setIsConnected(false);
     setMatchId(null);
@@ -754,6 +779,45 @@ export default function VideoChat() {
     setIsSearching(true);
     await startLocalStream();
     await attemptMatch();
+  };
+
+  const submitReport = async () => {
+    if (!partnerProfile || !user) return;
+    const reason = reportReason.trim();
+    if (!reason) {
+      toast({
+        title: 'Report reason required',
+        description: 'Tell us why you are reporting this user.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsSubmittingReport(true);
+    const { error } = await supabase.rpc('submit_report', {
+      p_target_id: partnerProfile.id,
+      p_reason: reason,
+      p_details: reportDetails.trim() || null,
+      p_context: 'video_call',
+    });
+    setIsSubmittingReport(false);
+
+    if (error) {
+      toast({
+        title: 'Report failed',
+        description: error.message,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setReportReason('');
+    setReportDetails('');
+    setIsReportOpen(false);
+    toast({
+      title: 'Report submitted',
+      description: 'Thanks for keeping the community safe.',
+    });
   };
 
   const stopSearching = useCallback(async () => {
@@ -807,6 +871,27 @@ export default function VideoChat() {
       clearCallTimeout();
     };
   }, [clearCallTimeout, isConnected, skipPartner]);
+
+  useEffect(() => {
+    if (!matchId) return;
+    const channel = supabase.channel(`video-match-status:${matchId}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'video_matches',
+        filter: `id=eq.${matchId}`,
+      }, (payload) => {
+        const updated = payload.new as { ended_at?: string | null };
+        if (updated?.ended_at) {
+          void handleRemoteEnded('Chat ended by a moderator');
+        }
+      })
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [handleRemoteEnded, matchId]);
 
   const disconnect = async () => {
     clearSearchTimer();
@@ -884,79 +969,100 @@ export default function VideoChat() {
           </div>
         </div>
         
-        <Dialog>
-          <DialogTrigger asChild>
-            <Button variant="outline" size="icon">
-              <Settings className="w-5 h-5" />
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="glass border-border">
-            <DialogHeader>
-              <DialogTitle className="font-display">Device Settings</DialogTitle>
-              <DialogDescription>
-                Choose the camera, microphone, and speakers for your call.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4 mt-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium flex items-center gap-2">
-                  <Camera className="w-4 h-4 text-primary" />
-                  Camera
-                </label>
-                <Select value={selectedVideoDevice} onValueChange={(v) => switchDevice('video', v)}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select camera" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {videoDevices.map(device => (
-                      <SelectItem key={device.deviceId} value={device.deviceId}>
-                        {device.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+        <div className="flex items-center gap-2">
+          {isAdmin && (
+            <Dialog open={isAdminPanelOpen} onOpenChange={setIsAdminPanelOpen}>
+              <DialogTrigger asChild>
+                <Button variant="outline" size="icon">
+                  <Shield className="w-5 h-5" />
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="glass border-border max-w-4xl">
+                <DialogHeader>
+                  <DialogTitle className="font-display">Admin Panel</DialogTitle>
+                  <DialogDescription>
+                    Moderate calls, review reports, and manage bans.
+                  </DialogDescription>
+                </DialogHeader>
+                <AdminPanel />
+              </DialogContent>
+            </Dialog>
+          )}
 
-              <div className="space-y-2">
-                <label className="text-sm font-medium flex items-center gap-2">
-                  <Mic className="w-4 h-4 text-primary" />
-                  Microphone
-                </label>
-                <Select value={selectedAudioDevice} onValueChange={(v) => switchDevice('audio', v)}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select microphone" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {audioDevices.map(device => (
-                      <SelectItem key={device.deviceId} value={device.deviceId}>
-                        {device.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button variant="outline" size="icon">
+                <Settings className="w-5 h-5" />
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="glass border-border">
+              <DialogHeader>
+                <DialogTitle className="font-display">Device Settings</DialogTitle>
+                <DialogDescription>
+                  Choose the camera, microphone, and speakers for your call.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 mt-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium flex items-center gap-2">
+                    <Camera className="w-4 h-4 text-primary" />
+                    Camera
+                  </label>
+                  <Select value={selectedVideoDevice} onValueChange={(v) => switchDevice('video', v)}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select camera" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {videoDevices.map(device => (
+                        <SelectItem key={device.deviceId} value={device.deviceId}>
+                          {device.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
 
-              <div className="space-y-2">
-                <label className="text-sm font-medium flex items-center gap-2">
-                  <Volume2 className="w-4 h-4 text-primary" />
-                  Speakers
-                </label>
-                <Select value={selectedAudioOutput} onValueChange={setSelectedAudioOutput}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select speakers" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {audioOutputDevices.map(device => (
-                      <SelectItem key={device.deviceId} value={device.deviceId}>
-                        {device.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium flex items-center gap-2">
+                    <Mic className="w-4 h-4 text-primary" />
+                    Microphone
+                  </label>
+                  <Select value={selectedAudioDevice} onValueChange={(v) => switchDevice('audio', v)}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select microphone" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {audioDevices.map(device => (
+                        <SelectItem key={device.deviceId} value={device.deviceId}>
+                          {device.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium flex items-center gap-2">
+                    <Volume2 className="w-4 h-4 text-primary" />
+                    Speakers
+                  </label>
+                  <Select value={selectedAudioOutput} onValueChange={setSelectedAudioOutput}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select speakers" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {audioOutputDevices.map(device => (
+                        <SelectItem key={device.deviceId} value={device.deviceId}>
+                          {device.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
       {/* Video Grid */}
@@ -1009,7 +1115,7 @@ export default function VideoChat() {
           />
           
           <AnimatePresence mode="wait">
-            {!isConnected && !isSearching && !isConnecting && (
+            {!isBanned && !isConnected && !isSearching && !isConnecting && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -1026,7 +1132,7 @@ export default function VideoChat() {
               </motion.div>
             )}
 
-            {isSearching && (
+            {!isBanned && isSearching && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -1050,7 +1156,7 @@ export default function VideoChat() {
               </motion.div>
             )}
 
-            {isConnecting && (
+            {!isBanned && isConnecting && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -1071,7 +1177,7 @@ export default function VideoChat() {
               </motion.div>
             )}
 
-            {isConnected && !remoteReady && !needsRemoteTap && (
+            {!isBanned && isConnected && !remoteReady && !needsRemoteTap && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -1097,7 +1203,7 @@ export default function VideoChat() {
               </motion.div>
             )}
 
-            {needsRemoteTap && (
+            {!isBanned && needsRemoteTap && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -1112,6 +1218,25 @@ export default function VideoChat() {
                 </div>
               </motion.div>
             )}
+            {isBanned && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 flex items-center justify-center bg-card/90"
+              >
+                <div className="text-center max-w-xs">
+                  <Ban className="w-12 h-12 text-destructive mx-auto mb-4" />
+                  <p className="text-foreground font-semibold">Access restricted</p>
+                  <p className="text-sm text-muted-foreground mt-2">
+                    {banStatus?.reason || 'Your account is currently restricted.'}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Expires: {banExpiresLabel}
+                  </p>
+                </div>
+              </motion.div>
+            )}
           </AnimatePresence>
 
           <div className="absolute bottom-4 left-4 px-3 py-1.5 rounded-full glass text-sm">
@@ -1123,6 +1248,56 @@ export default function VideoChat() {
               ? 'Connecting...'
               : 'No one yet'}
           </div>
+
+          {isConnected && partnerProfile && (
+            <Dialog open={isReportOpen} onOpenChange={setIsReportOpen}>
+              <DialogTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="absolute bottom-4 right-4 bg-background/80 hover:bg-background"
+                >
+                  Report
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="glass border-border max-w-lg">
+                <DialogHeader>
+                  <DialogTitle className="font-display">Report user</DialogTitle>
+                  <DialogDescription>
+                    Report {partnerProfile.displayName} for violating community rules.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4 mt-2">
+                  <div className="space-y-2">
+                    <Label>Reason</Label>
+                    <Input
+                      value={reportReason}
+                      onChange={(event) => setReportReason(event.target.value)}
+                      placeholder="Harassment, spam, unsafe content..."
+                      className="bg-secondary border-0"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Details (optional)</Label>
+                    <Textarea
+                      value={reportDetails}
+                      onChange={(event) => setReportDetails(event.target.value)}
+                      placeholder="Add context to help moderators."
+                      className="bg-secondary border-0 min-h-[100px]"
+                    />
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button variant="outline" onClick={() => setIsReportOpen(false)}>
+                      Cancel
+                    </Button>
+                    <Button variant="hero" onClick={submitReport} disabled={isSubmittingReport}>
+                      {isSubmittingReport ? 'Submitting...' : 'Submit report'}
+                    </Button>
+                  </div>
+                </div>
+              </DialogContent>
+            </Dialog>
+          )}
         </motion.div>
       </div>
 

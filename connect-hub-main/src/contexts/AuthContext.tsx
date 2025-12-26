@@ -34,6 +34,12 @@ export interface UserStats {
   callConnections: number;
 }
 
+export interface BanStatus {
+  isBanned: boolean;
+  reason?: string | null;
+  expiresAt?: string | null;
+}
+
 export type StyleItemType = 'banner' | 'decoration';
 
 export interface UserUnlocks {
@@ -55,12 +61,18 @@ interface AuthContextType {
   isLoading: boolean;
   onlineCount: number | null;
   totalUsers: number | null;
+  banStatus: BanStatus | null;
+  adminRole: 'admin' | 'owner' | null;
+  isAdmin: boolean;
+  isOwner: boolean;
   getEffectiveStatus: (userId: string | null | undefined, status?: User['status'] | null) => User['status'];
   login: (email: string, password: string) => Promise<AuthResult>;
   signup: (email: string, password: string, username: string) => Promise<AuthResult>;
   loginWithOAuth: (provider: OAuthProvider) => Promise<AuthResult>;
   refreshStats: (targetUserId?: string) => Promise<void>;
   refreshUnlocks: (targetUserId?: string) => Promise<void>;
+  refreshAdminRole: () => Promise<void>;
+  refreshBanStatus: () => Promise<void>;
   awardMessagePoint: () => Promise<PointsResult>;
   awardCallPoint: () => Promise<PointsResult>;
   purchaseStyle: (itemType: StyleItemType, itemId: string) => Promise<PointsResult>;
@@ -173,6 +185,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [onlineCount, setOnlineCount] = useState<number | null>(null);
   const [totalUsers, setTotalUsers] = useState<number | null>(null);
+  const [banStatus, setBanStatus] = useState<BanStatus | null>(null);
+  const [adminRole, setAdminRole] = useState<'admin' | 'owner' | null>(null);
   const [onlineUserIds, setOnlineUserIds] = useState<string[]>([]);
   const onlineUserIdSet = useMemo(() => new Set(onlineUserIds), [onlineUserIds]);
 
@@ -345,6 +359,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUnlocks(nextUnlocks);
   }, [user?.id]);
 
+  const refreshAdminRole = useCallback(async () => {
+    if (!user?.id) {
+      setAdminRole(null);
+      return;
+    }
+
+    const { data, error } = await supabase.rpc('get_my_admin_role');
+    if (error) {
+      console.warn('Failed to load admin role:', error.message);
+      setAdminRole(null);
+      return;
+    }
+
+    const role = typeof data === 'string' ? data : null;
+    if (role === 'admin' || role === 'owner') {
+      setAdminRole(role);
+    } else {
+      setAdminRole(null);
+    }
+  }, [user?.id]);
+
+  const refreshBanStatus = useCallback(async () => {
+    if (!user?.id) {
+      setBanStatus(null);
+      return;
+    }
+
+    const { data, error } = await supabase.rpc('get_my_ban_status');
+    if (error) {
+      console.warn('Failed to load ban status:', error.message);
+      setBanStatus(null);
+      return;
+    }
+
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      setBanStatus({ isBanned: false });
+      return;
+    }
+
+    setBanStatus({
+      isBanned: Boolean(row.is_banned),
+      reason: row.reason ?? null,
+      expiresAt: row.expires_at ?? null,
+    });
+  }, [user?.id]);
+
   useEffect(() => {
     if (!user) {
       setStats(null);
@@ -361,6 +422,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     void refreshUnlocks(user.id);
   }, [refreshUnlocks, user?.id]);
+
+  useEffect(() => {
+    if (!user) {
+      setAdminRole(null);
+      return;
+    }
+    void refreshAdminRole();
+  }, [refreshAdminRole, user?.id]);
+
+  useEffect(() => {
+    if (!user) {
+      setBanStatus(null);
+      return;
+    }
+    void refreshBanStatus();
+  }, [refreshBanStatus, user?.id]);
 
   useEffect(() => {
     if (!user) return;
@@ -503,6 +580,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setStats(null);
     setUnlocks(null);
     setUnlockingEnabled(true);
+    setBanStatus(null);
+    setAdminRole(null);
     void supabase.auth.signOut();
   };
 
@@ -550,12 +629,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLoading,
         onlineCount,
         totalUsers,
+        banStatus,
+        adminRole,
+        isAdmin: adminRole === 'admin' || adminRole === 'owner',
+        isOwner: adminRole === 'owner',
         getEffectiveStatus,
         login,
         signup,
         loginWithOAuth,
         refreshStats,
         refreshUnlocks,
+        refreshAdminRole,
+        refreshBanStatus,
         awardMessagePoint,
         awardCallPoint,
         purchaseStyle,

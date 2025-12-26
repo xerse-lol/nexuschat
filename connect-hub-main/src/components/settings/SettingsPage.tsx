@@ -16,6 +16,7 @@ import {
   Monitor
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -31,13 +32,16 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
+import { supabase } from '@/lib/supabaseClient';
 
 export default function SettingsPage() {
   const { toast } = useToast();
-  const { user } = useAuth();
+  const { user, adminRole, refreshAdminRole } = useAuth();
   
   // Account settings
   const [showEmail, setShowEmail] = useState(false);
+  const [redeemCode, setRedeemCode] = useState('');
+  const [isRedeeming, setIsRedeeming] = useState(false);
   
   // Notification settings
   const [notifications, setNotifications] = useState({
@@ -71,6 +75,40 @@ export default function SettingsPage() {
     toast({
       title: "Settings Saved",
       description: "Your preferences have been updated",
+    });
+  };
+
+  const handleRedeemCode = async () => {
+    const trimmed = redeemCode.trim();
+    if (!trimmed) {
+      toast({
+        title: 'Code required',
+        description: 'Enter a redeem code to continue.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsRedeeming(true);
+    const { data, error } = await supabase.rpc('redeem_admin_code', { p_code: trimmed });
+    setIsRedeeming(false);
+
+    if (error) {
+      toast({
+        title: 'Redeem failed',
+        description: error.message,
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    await refreshAdminRole();
+    setRedeemCode('');
+    toast({
+      title: 'Admin access granted',
+      description: typeof data === 'string'
+        ? `You are now ${data === 'owner' ? 'the owner' : 'an admin'}.`
+        : 'Admin access updated.',
     });
   };
 
@@ -150,6 +188,42 @@ export default function SettingsPage() {
                     <Button variant="outline">Change Password</Button>
                     <Button variant="destructive">Delete Account</Button>
                   </div>
+                </div>
+              </div>
+
+              <div className="bg-card rounded-2xl border border-border p-6 space-y-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="font-display font-semibold text-lg">Admin Access</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Redeem a trusted code to unlock admin tools.
+                    </p>
+                  </div>
+                  {adminRole && (
+                    <Badge variant={adminRole === 'owner' ? 'default' : 'secondary'}>
+                      {adminRole === 'owner' ? 'Owner' : 'Admin'}
+                    </Badge>
+                  )}
+                </div>
+
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <div className="flex-1 space-y-2">
+                    <Label>Redeem Code</Label>
+                    <Input
+                      value={redeemCode}
+                      onChange={(event) => setRedeemCode(event.target.value)}
+                      placeholder="NX-XXXX-XXXX-XXXX"
+                      className="bg-secondary border-0"
+                    />
+                  </div>
+                  <Button
+                    variant="hero"
+                    className="self-start sm:self-end"
+                    onClick={handleRedeemCode}
+                    disabled={isRedeeming}
+                  >
+                    {isRedeeming ? 'Redeeming...' : 'Redeem'}
+                  </Button>
                 </div>
               </div>
             </motion.div>
