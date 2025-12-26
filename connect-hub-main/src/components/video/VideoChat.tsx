@@ -943,6 +943,38 @@ export default function VideoChat() {
     [isAdmin, setupLivekitSession, setupPeerConnection, shadowMode, useLivekit]
   );
 
+  const loadPartnerProfile = useCallback(async (partnerId: string) => {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, username, display_name, avatar')
+      .eq('id', partnerId)
+      .maybeSingle();
+
+    if (error || !data) {
+      const fallbackName = `user_${partnerId.slice(0, 5)}`;
+      setPartnerProfile({
+        id: partnerId,
+        username: fallbackName,
+        displayName: fallbackName,
+        avatar: avatarDataUri(fallbackName),
+      });
+      return;
+    }
+
+    const username = data.username || `user_${partnerId.slice(0, 5)}`;
+    const displayName = data.display_name || username;
+    const avatar = isSafeImageUrl(data.avatar)
+      ? data.avatar || avatarDataUri(username)
+      : avatarDataUri(username);
+
+    setPartnerProfile({
+      id: partnerId,
+      username,
+      displayName,
+      avatar,
+    });
+  }, []);
+
   const spectateUser = useCallback(
     async (targetId: string) => {
       if (!useLivekit) {
@@ -1010,38 +1042,6 @@ export default function VideoChat() {
       useLivekit,
     ]
   );
-
-  const loadPartnerProfile = useCallback(async (partnerId: string) => {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('id, username, display_name, avatar')
-      .eq('id', partnerId)
-      .maybeSingle();
-
-    if (error || !data) {
-      const fallbackName = `user_${partnerId.slice(0, 5)}`;
-      setPartnerProfile({
-        id: partnerId,
-        username: fallbackName,
-        displayName: fallbackName,
-        avatar: avatarDataUri(fallbackName),
-      });
-      return;
-    }
-
-    const username = data.username || `user_${partnerId.slice(0, 5)}`;
-    const displayName = data.display_name || username;
-    const avatar = isSafeImageUrl(data.avatar)
-      ? data.avatar || avatarDataUri(username)
-      : avatarDataUri(username);
-
-    setPartnerProfile({
-      id: partnerId,
-      username,
-      displayName,
-      avatar,
-    });
-  }, []);
 
   const attemptMatch = useCallback(async () => {
     const { data, error } = await supabase.rpc('find_match');
