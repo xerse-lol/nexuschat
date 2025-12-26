@@ -10,6 +10,7 @@ import {
   SkipForward,
   Settings,
   Maximize2,
+  Eye,
   Monitor,
   Camera,
   Volume2,
@@ -36,6 +37,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import AdminPanel from '@/components/admin/AdminPanel';
 import { useAuth } from '@/contexts/AuthContext';
@@ -174,6 +176,7 @@ export default function VideoChat() {
   const iceRestartAttemptRef = useRef(false);
   const searchAttemptsRef = useRef(0);
   const matchIdRef = useRef<string | null>(null);
+  const shadowPreviousRef = useRef<{ video: boolean; audio: boolean } | null>(null);
   
   const { user, awardCallPoint, onlineCount, totalUsers, isAdmin, banStatus } = useAuth();
   const { toast } = useToast();
@@ -182,6 +185,7 @@ export default function VideoChat() {
   const [reportReason, setReportReason] = useState('');
   const [reportDetails, setReportDetails] = useState('');
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
+  const [shadowMode, setShadowMode] = useState(false);
   const isConnecting = Boolean(matchId) && !isSearching && !isConnected;
   const offlineCount = totalUsers !== null && onlineCount !== null
     ? Math.max(totalUsers - onlineCount, 0)
@@ -194,6 +198,13 @@ export default function VideoChat() {
   const banExpiresLabel = banStatus?.expiresAt
     ? new Date(banStatus.expiresAt).toLocaleString()
     : 'Permanent';
+
+  useEffect(() => {
+    if (!isAdmin && shadowMode) {
+      setShadowMode(false);
+      shadowPreviousRef.current = null;
+    }
+  }, [isAdmin, shadowMode]);
 
   useEffect(() => {
     getMediaDevices();
@@ -308,8 +319,14 @@ export default function VideoChat() {
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
       }
-      setVideoEnabled(stream.getVideoTracks().every((track) => track.enabled));
-      setAudioEnabled(stream.getAudioTracks().every((track) => track.enabled));
+      const shouldShadow = shadowMode && isAdmin;
+      if (shouldShadow) {
+        stream.getTracks().forEach((track) => {
+          track.enabled = false;
+        });
+      }
+      setVideoEnabled(shouldShadow ? false : stream.getVideoTracks().every((track) => track.enabled));
+      setAudioEnabled(shouldShadow ? false : stream.getAudioTracks().every((track) => track.enabled));
 
       const pc = peerConnectionRef.current;
       if (pc) {
@@ -348,6 +365,36 @@ export default function VideoChat() {
       localVideoRef.current.srcObject = null;
     }
   }, []);
+
+  const setMediaEnabled = useCallback((nextVideo: boolean, nextAudio: boolean) => {
+    if (streamRef.current) {
+      streamRef.current.getVideoTracks().forEach((track) => {
+        track.enabled = nextVideo;
+      });
+      streamRef.current.getAudioTracks().forEach((track) => {
+        track.enabled = nextAudio;
+      });
+    }
+    setVideoEnabled(nextVideo);
+    setAudioEnabled(nextAudio);
+  }, []);
+
+  const handleShadowToggle = useCallback((checked: boolean) => {
+    setShadowMode(checked);
+    if (checked) {
+      if (!shadowPreviousRef.current) {
+        shadowPreviousRef.current = { video: videoEnabled, audio: audioEnabled };
+      }
+      setMediaEnabled(false, false);
+      return;
+    }
+
+    const previous = shadowPreviousRef.current;
+    shadowPreviousRef.current = null;
+    if (previous) {
+      setMediaEnabled(previous.video, previous.audio);
+    }
+  }, [audioEnabled, setMediaEnabled, videoEnabled]);
 
   const clearSearchTimer = () => {
     if (searchTimerRef.current) {
@@ -1088,8 +1135,15 @@ export default function VideoChat() {
               </div>
             </div>
           )}
-          <div className="absolute bottom-4 left-4 px-3 py-1.5 rounded-full glass text-sm">
-            You
+          <div className="absolute bottom-4 left-4 flex flex-col gap-2">
+            <div className="px-3 py-1.5 rounded-full glass text-sm">You</div>
+            {isAdmin && (
+              <div className="flex items-center gap-2 rounded-full glass px-3 py-1.5 text-xs">
+                <Eye className="h-3.5 w-3.5 text-primary" />
+                <span className="text-muted-foreground">Shadow mode</span>
+                <Switch checked={shadowMode} onCheckedChange={handleShadowToggle} />
+              </div>
+            )}
           </div>
           <Button
             variant="ghost"
@@ -1253,9 +1307,9 @@ export default function VideoChat() {
             <Dialog open={isReportOpen} onOpenChange={setIsReportOpen}>
               <DialogTrigger asChild>
                 <Button
-                  variant="outline"
+                  variant="destructive"
                   size="sm"
-                  className="absolute bottom-4 right-4 bg-background/80 hover:bg-background"
+                  className="absolute bottom-4 right-4"
                 >
                   Report
                 </Button>
@@ -1312,6 +1366,7 @@ export default function VideoChat() {
           size="icon"
           className="w-14 h-14 rounded-full"
           onClick={toggleVideo}
+          disabled={shadowMode}
         >
           {videoEnabled ? <Video className="w-6 h-6" /> : <VideoOff className="w-6 h-6" />}
         </Button>
@@ -1321,6 +1376,7 @@ export default function VideoChat() {
           size="icon"
           className="w-14 h-14 rounded-full"
           onClick={toggleAudio}
+          disabled={shadowMode}
         >
           {audioEnabled ? <Mic className="w-6 h-6" /> : <MicOff className="w-6 h-6" />}
         </Button>
