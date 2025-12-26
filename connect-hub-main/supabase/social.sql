@@ -1502,10 +1502,10 @@ create or replace function public.generate_admin_codes(
   p_max_uses integer default 1,
   p_note text default null
 )
-returns table (code text)
-language plpgsql
-security definer
-set search_path = public
+  returns table (code text)
+  language plpgsql
+  security definer
+  set search_path = public, extensions
 as $$
 declare
   v_inserted integer := 0;
@@ -1527,8 +1527,8 @@ begin
     raise exception 'count must be >= 1';
   end if;
 
-  while v_inserted < p_count loop
-    v_raw := upper(encode(gen_random_bytes(6), 'hex'));
+    while v_inserted < p_count loop
+      v_raw := upper(encode(extensions.gen_random_bytes(6), 'hex'));
     v_code := format('NX-%s-%s-%s', substr(v_raw, 1, 4), substr(v_raw, 5, 4), substr(v_raw, 9, 4));
     begin
       insert into public.admin_codes (code, role, max_uses, note, created_by)
