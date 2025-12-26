@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { RealtimeChannel } from '@supabase/supabase-js';
+import { Room, RoomEvent, Track, type LocalTrack, type RemoteTrack, type RemoteParticipant } from 'livekit-client';
 import { 
   Video, 
   VideoOff, 
@@ -165,6 +166,9 @@ export default function VideoChat() {
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const signalingChannelRef = useRef<RealtimeChannel | null>(null);
+  const livekitRoomRef = useRef<Room | null>(null);
+  const livekitAudioElementsRef = useRef<HTMLMediaElement[]>([]);
+  const spectateSlotsRef = useRef<Map<string, HTMLVideoElement>>(new Map());
   const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   const isOffererRef = useRef(false);
   const sentOfferRef = useRef(false);
@@ -176,6 +180,7 @@ export default function VideoChat() {
   const iceRestartAttemptRef = useRef(false);
   const searchAttemptsRef = useRef(0);
   const matchIdRef = useRef<string | null>(null);
+  const isSpectatingRef = useRef(false);
   const shadowPreviousRef = useRef<{ video: boolean; audio: boolean } | null>(null);
   
   const { user, awardCallPoint, onlineCount, totalUsers, isAdmin, banStatus } = useAuth();
@@ -186,6 +191,9 @@ export default function VideoChat() {
   const [reportDetails, setReportDetails] = useState('');
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
   const [shadowMode, setShadowMode] = useState(false);
+  const [isSpectating, setIsSpectating] = useState(false);
+  const livekitUrl = (import.meta.env.VITE_LIVEKIT_URL || '').trim();
+  const useLivekit = Boolean(livekitUrl);
   const isConnecting = Boolean(matchId) && !isSearching && !isConnected;
   const offlineCount = totalUsers !== null && onlineCount !== null
     ? Math.max(totalUsers - onlineCount, 0)
@@ -204,7 +212,10 @@ export default function VideoChat() {
       setShadowMode(false);
       shadowPreviousRef.current = null;
     }
-  }, [isAdmin, shadowMode]);
+    if (!isAdmin && isSpectating) {
+      setIsSpectating(false);
+    }
+  }, [isAdmin, isSpectating, shadowMode]);
 
   useEffect(() => {
     getMediaDevices();
@@ -222,6 +233,10 @@ export default function VideoChat() {
   useEffect(() => {
     isConnectedRef.current = isConnected;
   }, [isConnected]);
+
+  useEffect(() => {
+    isSpectatingRef.current = isSpectating;
+  }, [isSpectating]);
 
   const getMediaDevices = async () => {
     let permissionStream: MediaStream | null = null;
@@ -435,6 +450,120 @@ export default function VideoChat() {
     }
   }, []);
 
+  const clearSpectateSlots = useCallback(() => {
+    spectateSlotsRef.current.clear();
+  }, []);
+
+  const cleanupLivekit = useCallback(async () => {
+    const room = livekitRoomRef.current;
+    if (!room) return;
+
+    livekitRoomRef.current = null;
+    clearSpectateSlots();
+
+    room.remoteParticipants.forEach((participant) => {
+      participant.tracks.forEach((pub) => {
+        if (pub.track) {
+          pub.track.detach();
+        }
+      });
+    });
+
+    room.localParticipant.trackPublications.forEach((pub) => {
+      if (pub.track) {
+        pub.track.detach();
+      }
+    });
+
+    livekitAudioElementsRef.current.forEach((element) => {
+      element.remove();
+    });
+    livekitAudioElementsRef.current = [];
+
+    try {
+      await room.disconnect(true);
+    } catch (err) {
+      console.warn('Failed to disconnect LiveKit room', err);
+    }
+
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = null;
+    }
+    if (isSpectating && localVideoRef.current) {
+      localVideoRef.current.srcObject = null;
+    }
+    setRemoteReady(false);
+    setNeedsRemoteTap(false);
+  }, [clearSpectateSlots, isSpectating]);
+
+  const selectSpectateSlot = useCallback((participant: RemoteParticipant) => {
+    const current = spectateSlotsRef.current.get(participant.identity);
+    if (current) return current;
+    const slots = [remoteVideoRef.current, localVideoRef.current].filter(Boolean) as HTMLVideoElement[];
+    const used = new Set(spectateSlotsRef.current.values());
+    const available = slots.find((slot) => !used.has(slot));
+    const chosen = available ?? slots[0];
+    if (chosen) {
+      spectateSlotsRef.current.set(participant.identity, chosen);
+    }
+    return chosen ?? null;
+  }, []);
+
+  const publishLivekitTracks = useCallback(async (room: Room) => {
+    const stream = streamRef.current;
+    if (!stream) return;
+    const tracks = stream.getTracks();
+    if (tracks.length === 0) return;
+
+    const existingTracks = Array.from(room.localParticipant.trackPublications.values())
+      .map((pub) => pub.track)
+      .filter(Boolean) as LocalTrack[];
+
+    if (existingTracks.length) {
+      await room.localParticipant.unpublishTracks(existingTracks);
+    }
+
+    for (const track of tracks) {
+      await room.localParticipant.publishTrack(track);
+    }
+  }, []);
+
+  const attachLivekitTrack = useCallback(
+    (track: RemoteTrack, participant: RemoteParticipant) => {
+      if (track.kind === Track.Kind.Video) {
+        const target = isSpectating ? selectSpectateSlot(participant) : remoteVideoRef.current;
+        if (!target) return;
+        track.attach(target);
+        setRemoteReady(true);
+        void tryPlayRemote();
+        return;
+      }
+
+      const element = track.attach() as HTMLMediaElement;
+      element.style.display = 'none';
+      document.body.appendChild(element);
+      livekitAudioElementsRef.current.push(element);
+    },
+    [isSpectating, selectSpectateSlot, tryPlayRemote]
+  );
+
+  const detachLivekitTrack = useCallback((track: RemoteTrack, participant: RemoteParticipant) => {
+    const elements = track.detach();
+    elements.forEach((element) => {
+      if (element.tagName.toLowerCase() === 'audio') {
+        element.remove();
+      }
+    });
+
+    livekitAudioElementsRef.current = livekitAudioElementsRef.current.filter(
+      (element) => !elements.includes(element)
+    );
+
+    if (track.kind === Track.Kind.Video) {
+      spectateSlotsRef.current.delete(participant.identity);
+    }
+  }, []);
+
   const sendSignal = useCallback(async (payload: SignalPayload) => {
     const channel = signalingChannelRef.current;
     if (!channel) return;
@@ -442,6 +571,7 @@ export default function VideoChat() {
   }, []);
 
   const cleanupPeerConnection = useCallback(async () => {
+    await cleanupLivekit();
     pendingIceCandidatesRef.current = [];
     sentOfferRef.current = false;
     isOffererRef.current = false;
@@ -475,7 +605,7 @@ export default function VideoChat() {
       await channel.untrack();
       await supabase.removeChannel(channel);
     }
-  }, [clearCallTimeout, clearConnectTimeout]);
+  }, [cleanupLivekit, clearCallTimeout, clearConnectTimeout]);
 
   useEffect(() => {
     return () => {
@@ -483,7 +613,7 @@ export default function VideoChat() {
         window.clearTimeout(searchTimerRef.current);
       }
       void supabase.rpc('stop_search');
-      if (matchIdRef.current) {
+      if (matchIdRef.current && !isSpectatingRef.current) {
         void supabase.rpc('end_match', { p_match_id: matchIdRef.current });
       }
       void cleanupPeerConnection();
@@ -492,8 +622,9 @@ export default function VideoChat() {
   }, [cleanupPeerConnection, stopLocalStream]);
 
   const handleRemoteEnded = useCallback(
-    async (message: string) => {
-      if (matchIdRef.current) {
+    async (message: string, options?: { endMatch?: boolean }) => {
+      const shouldEndMatch = options?.endMatch ?? true;
+      if (shouldEndMatch && matchIdRef.current) {
         await supabase.rpc('end_match', { p_match_id: matchIdRef.current });
       }
       await cleanupPeerConnection();
@@ -502,6 +633,7 @@ export default function VideoChat() {
       setMatchId(null);
       setPartnerProfile(null);
       setNoMatchMessage(false);
+      setIsSpectating(false);
       toast({
         title: message,
         description: 'The connection ended.',
@@ -729,6 +861,156 @@ export default function VideoChat() {
     [createPeerConnection, setupSignalingChannel, user]
   );
 
+  const setupLivekitSession = useCallback(
+    async (nextMatchId: string, shadow: boolean) => {
+      if (!useLivekit || !livekitUrl || !user) return;
+
+      const { data, error } = await supabase.functions.invoke('livekit-token', {
+        body: { match_id: nextMatchId, shadow },
+      });
+
+      if (error || !data?.token) {
+        toast({
+          title: 'LiveKit token failed',
+          description: error?.message || 'Unable to get LiveKit token.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      await cleanupLivekit();
+
+      if (shadow) {
+        stopLocalStream();
+      } else if (!streamRef.current) {
+        await startLocalStream();
+      }
+
+      const room = new Room({ adaptiveStream: true, dynacast: true });
+      livekitRoomRef.current = room;
+
+      room.on(RoomEvent.TrackSubscribed, (track, _pub, participant) => {
+        attachLivekitTrack(track as RemoteTrack, participant);
+      });
+      room.on(RoomEvent.TrackUnsubscribed, (track, _pub, participant) => {
+        detachLivekitTrack(track as RemoteTrack, participant);
+      });
+      room.on(RoomEvent.ParticipantConnected, () => {
+        clearConnectTimeout();
+        setIsConnected(true);
+        if (!shadow && !hasAwardedRef.current) {
+          hasAwardedRef.current = true;
+          void awardCallPoint();
+        }
+      });
+      room.on(RoomEvent.ParticipantDisconnected, () => {
+        if (room.remoteParticipants.size === 0) {
+          void handleRemoteEnded('Partner disconnected', { endMatch: !shadow });
+        }
+      });
+
+      await room.connect(livekitUrl, data.token as string);
+
+      if (!shadow) {
+        await publishLivekitTracks(room);
+      }
+    },
+    [
+      attachLivekitTrack,
+      awardCallPoint,
+      cleanupLivekit,
+      clearConnectTimeout,
+      detachLivekitTrack,
+      handleRemoteEnded,
+      livekitUrl,
+      publishLivekitTracks,
+      startLocalStream,
+      stopLocalStream,
+      toast,
+      useLivekit,
+      user,
+    ]
+  );
+
+  const setupMatchConnection = useCallback(
+    async (nextMatchId: string, nextPartnerId: string) => {
+      if (useLivekit) {
+        await setupLivekitSession(nextMatchId, shadowMode && isAdmin);
+        return;
+      }
+      await setupPeerConnection(nextMatchId, nextPartnerId);
+    },
+    [isAdmin, setupLivekitSession, setupPeerConnection, shadowMode, useLivekit]
+  );
+
+  const spectateUser = useCallback(
+    async (targetId: string) => {
+      if (!useLivekit) {
+        toast({
+          title: 'LiveKit not configured',
+          description: 'Set VITE_LIVEKIT_URL to enable shadow spectate.',
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      clearSearchTimer();
+      clearConnectTimeout();
+      setIsSearching(false);
+      setIsConnected(false);
+      setNoMatchMessage(false);
+      setPartnerProfile(null);
+      hasAwardedRef.current = false;
+
+      await cleanupPeerConnection();
+      stopLocalStream();
+
+      const { data, error } = await supabase.rpc('admin_get_active_match', {
+        p_target_id: targetId,
+      });
+
+      if (error) {
+        toast({
+          title: 'Spectate failed',
+          description: error.message,
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      const match = Array.isArray(data) ? data[0] : data;
+      if (!match) {
+        toast({
+          title: 'No active call',
+          description: 'This user is not in a live call.',
+        });
+        return;
+      }
+
+      setShadowMode(true);
+      setIsSpectating(true);
+      setMatchId(match);
+      await loadPartnerProfile(targetId);
+      await setupLivekitSession(match, true);
+      startConnectTimeout();
+      setIsAdminPanelOpen(false);
+      toast({
+        title: 'Spectating',
+        description: 'Connecting to live call...',
+      });
+    },
+    [
+      cleanupPeerConnection,
+      clearConnectTimeout,
+      loadPartnerProfile,
+      setupLivekitSession,
+      startConnectTimeout,
+      stopLocalStream,
+      toast,
+      useLivekit,
+    ]
+  );
+
   const loadPartnerProfile = useCallback(async (partnerId: string) => {
     const { data, error } = await supabase
       .from('profiles')
@@ -785,7 +1067,7 @@ export default function VideoChat() {
       searchAttemptsRef.current = 0;
       hasAwardedRef.current = false;
       await loadPartnerProfile(result.partner_id);
-      await setupPeerConnection(result.match_id, result.partner_id);
+      await setupMatchConnection(result.match_id, result.partner_id);
       startConnectTimeout();
       toast({
         title: "Connected!",
@@ -801,7 +1083,7 @@ export default function VideoChat() {
     searchTimerRef.current = window.setTimeout(() => {
       void attemptMatch();
     }, 4000);
-  }, [loadPartnerProfile, setupPeerConnection, toast]);
+  }, [loadPartnerProfile, setupMatchConnection, toast]);
 
   const startSearching = async () => {
     if (isBanned) {
@@ -821,10 +1103,15 @@ export default function VideoChat() {
     setNoMatchMessage(false);
     searchAttemptsRef.current = 0;
     hasAwardedRef.current = false;
+    setIsSpectating(false);
     clearSearchTimer();
     clearConnectTimeout();
     setIsSearching(true);
-    await startLocalStream();
+    if (useLivekit && shadowMode && isAdmin) {
+      stopLocalStream();
+    } else {
+      await startLocalStream();
+    }
     await attemptMatch();
   };
 
@@ -875,6 +1162,7 @@ export default function VideoChat() {
     setPartnerProfile(null);
     setNoMatchMessage(false);
     searchAttemptsRef.current = 0;
+    setIsSpectating(false);
     clearConnectTimeout();
     await supabase.rpc('stop_search');
     await cleanupPeerConnection();
@@ -882,6 +1170,10 @@ export default function VideoChat() {
   }, [cleanupPeerConnection, clearConnectTimeout, stopLocalStream]);
 
   const skipPartner = async () => {
+    if (isSpectating) {
+      await disconnect();
+      return;
+    }
     if (matchId) {
       if (user) {
         await sendSignal({ type: 'bye', from: user.id });
@@ -942,12 +1234,12 @@ export default function VideoChat() {
 
   const disconnect = async () => {
     clearSearchTimer();
-    if (user) {
+    if (!useLivekit && user) {
       await sendSignal({ type: 'bye', from: user.id });
     }
-    if (matchId) {
+    if (matchId && !isSpectating) {
       await supabase.rpc('end_match', { p_match_id: matchId });
-    } else {
+    } else if (!isSpectating) {
       await supabase.rpc('stop_search');
     }
     await cleanupPeerConnection();
@@ -956,6 +1248,7 @@ export default function VideoChat() {
     setMatchId(null);
     setPartnerProfile(null);
     setNoMatchMessage(false);
+    setIsSpectating(false);
     stopLocalStream();
     toast({
       title: "Disconnected",
@@ -964,21 +1257,11 @@ export default function VideoChat() {
   };
 
   const toggleVideo = () => {
-    if (streamRef.current) {
-      streamRef.current.getVideoTracks().forEach(track => {
-        track.enabled = !track.enabled;
-      });
-      setVideoEnabled(!videoEnabled);
-    }
+    setMediaEnabled(!videoEnabled, audioEnabled);
   };
 
   const toggleAudio = () => {
-    if (streamRef.current) {
-      streamRef.current.getAudioTracks().forEach(track => {
-        track.enabled = !track.enabled;
-      });
-      setAudioEnabled(!audioEnabled);
-    }
+    setMediaEnabled(videoEnabled, !audioEnabled);
   };
 
   const switchDevice = async (type: 'video' | 'audio', deviceId: string) => {
@@ -988,8 +1271,11 @@ export default function VideoChat() {
       setSelectedAudioDevice(deviceId);
     }
     
-    if (streamRef.current) {
+    if (streamRef.current || useLivekit) {
       await startLocalStream();
+    }
+    if (useLivekit && livekitRoomRef.current && !shadowMode) {
+      await publishLivekitTracks(livekitRoomRef.current);
     }
   };
 
@@ -1031,7 +1317,7 @@ export default function VideoChat() {
                     Moderate calls, review reports, and manage bans.
                   </DialogDescription>
                 </DialogHeader>
-                <AdminPanel />
+                <AdminPanel onSpectate={spectateUser} />
               </DialogContent>
             </Dialog>
           )}
@@ -1136,7 +1422,7 @@ export default function VideoChat() {
             </div>
           )}
           <div className="absolute bottom-4 left-4 px-3 py-1.5 rounded-full glass text-sm">
-            You
+            {isSpectating ? 'Spectating' : 'You'}
           </div>
           <Button
             variant="ghost"
@@ -1302,7 +1588,7 @@ export default function VideoChat() {
                 <Button
                   variant="destructive"
                   size="sm"
-                  className="absolute bottom-4 right-4"
+                  className="absolute bottom-4 right-4 border border-destructive/70 shadow-sm"
                 >
                   Report
                 </Button>
@@ -1355,7 +1641,7 @@ export default function VideoChat() {
         className="flex items-center gap-4 py-4"
       >
         {isAdmin && (
-          <div className="flex items-center gap-2 rounded-full glass px-3 py-2 text-xs">
+          <div className="flex items-center gap-2 rounded-full glass border border-primary/40 px-3 py-2 text-xs">
             <Eye className="h-4 w-4 text-primary" />
             <span className="text-muted-foreground">Shadow</span>
             <Switch checked={shadowMode} onCheckedChange={handleShadowToggle} />
