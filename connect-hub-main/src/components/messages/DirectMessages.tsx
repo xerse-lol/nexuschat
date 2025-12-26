@@ -243,6 +243,19 @@ const toAttachmentKind = (file: File): PendingAttachment['kind'] => {
   return 'file';
 };
 
+const safeMap = <T, R>(
+  value: T[] | null | undefined,
+  mapper: ((item: T) => R) | null | undefined,
+  label: string
+): R[] => {
+  if (!Array.isArray(value)) return [];
+  if (typeof mapper !== 'function') {
+    console.error(`[DirectMessages] ${label} mapper is not a function`, mapper);
+    return [];
+  }
+  return value.map(mapper);
+};
+
 const normalizeAttachments = (value: unknown): Attachment[] => {
   if (!Array.isArray(value)) return [];
   return value
@@ -440,7 +453,7 @@ export default function DirectMessages() {
       return;
     }
 
-    const mapped = (data as ThreadRow[] | null)?.map(mapThreadRow) ?? [];
+    const mapped = safeMap(data as ThreadRow[] | null, mapThreadRow, 'thread rows');
     setThreads(mapped);
     setIsLoadingThreads(false);
 
@@ -466,7 +479,7 @@ export default function DirectMessages() {
       return;
     }
 
-    const mapped = (data as FriendRequestRow[] | null)?.map(mapFriendRequestRow) ?? [];
+    const mapped = safeMap(data as FriendRequestRow[] | null, mapFriendRequestRow, 'friend request rows');
     setFriendRequests(mapped);
     setIsLoadingRequests(false);
   }, [mapFriendRequestRow, user]);
@@ -571,7 +584,7 @@ export default function DirectMessages() {
         return;
       }
 
-      const mapped = (data as MessageRow[] | null)?.map(mapMessageRow) ?? [];
+      const mapped = safeMap(data as MessageRow[] | null, mapMessageRow, 'message rows');
       setMessages(mapped);
       void loadReadState(threadId);
       setIsLoadingMessages(false);

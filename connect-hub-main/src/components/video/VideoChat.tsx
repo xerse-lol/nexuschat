@@ -12,7 +12,8 @@ import {
   Maximize2,
   Monitor,
   Camera,
-  Volume2
+  Volume2,
+  Users
 } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -93,6 +94,46 @@ const getIceConfig = (): RTCConfiguration => {
   };
 };
 
+const useAnimatedCount = (value: number | null) => {
+  const [animated, setAnimated] = useState<number | null>(value);
+  const previousRef = useRef<number | null>(value);
+
+  useEffect(() => {
+    if (value === null) {
+      previousRef.current = null;
+      setAnimated(null);
+      return;
+    }
+
+    const startValue = previousRef.current ?? value;
+    if (startValue === value) {
+      previousRef.current = value;
+      setAnimated(value);
+      return;
+    }
+
+    const durationMs = 320;
+    const startTime = performance.now();
+    let frameId = 0;
+
+    const tick = (now: number) => {
+      const progress = Math.min((now - startTime) / durationMs, 1);
+      const nextValue = Math.round(startValue + (value - startValue) * progress);
+      setAnimated(nextValue);
+      if (progress < 1) {
+        frameId = window.requestAnimationFrame(tick);
+      } else {
+        previousRef.current = value;
+      }
+    };
+
+    frameId = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [value]);
+
+  return animated;
+};
+
 export default function VideoChat() {
   const [isConnected, setIsConnected] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
@@ -128,9 +169,16 @@ export default function VideoChat() {
   const searchAttemptsRef = useRef(0);
   const matchIdRef = useRef<string | null>(null);
   
-  const { user, awardCallPoint } = useAuth();
+  const { user, awardCallPoint, onlineCount, totalUsers } = useAuth();
   const { toast } = useToast();
   const isConnecting = Boolean(matchId) && !isSearching && !isConnected;
+  const offlineCount = totalUsers !== null && onlineCount !== null
+    ? Math.max(totalUsers - onlineCount, 0)
+    : null;
+  const animatedOnlineCount = useAnimatedCount(onlineCount);
+  const animatedOfflineCount = useAnimatedCount(offlineCount);
+  const animatedTotalUsers = useAnimatedCount(totalUsers);
+  const formatCount = (value: number | null) => (value === null ? '—' : value.toString());
 
   useEffect(() => {
     getMediaDevices();
@@ -820,6 +868,20 @@ export default function VideoChat() {
         <div>
           <h1 className="text-2xl font-display font-bold text-foreground">Video Chat</h1>
           <p className="text-muted-foreground">Connect with random people around the world</p>
+          <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
+            <span className="flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-online animate-pulse" />
+              {formatCount(animatedOnlineCount)} Online
+            </span>
+            <span className="flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-offline" />
+              {formatCount(animatedOfflineCount)} Offline
+            </span>
+            <span className="flex items-center gap-2">
+              <Users className="h-4 w-4" />
+              {formatCount(animatedTotalUsers)} Total
+            </span>
+          </div>
         </div>
         
         <Dialog>
